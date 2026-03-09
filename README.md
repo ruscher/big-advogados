@@ -291,6 +291,46 @@ python -m src.main
 4. **Sistemas** — acesse os sistemas judiciais com um clique na aba Sistemas.
 5. **Proteção** — ative a proteção por senha em menu → "Proteção por Senha".
 
+## Changelog
+
+### v0.1.0 — Lançamento Inicial (2025)
+
+#### Gerenciamento de Certificados
+- Importação e gerenciamento de certificados A1 (PFX/P12)
+- Detecção automática de tokens USB para certificados A3 (PKCS#11)
+- Visualização detalhada: titular, emissor, validade, número de série
+- Registro automático de módulos PKCS#11 via NSS em todos os navegadores
+
+#### Integração com Navegadores
+- Detecção automática de Firefox, Chrome, Chromium, Brave, Edge, Opera e Vivaldi
+- Instalação de certificados nos bancos NSS de cada navegador
+- **Configuração automática do Brave Shields** para compatibilidade com PJe Office — solução inédita no ecossistema BigLinux/BigCommunity
+
+#### PJe Office Pro
+- Instalação assistida do PJe Office Pro (download oficial CNJ/TRF3, verificação SHA-256)
+- Verificação automática de atualizações com opção de auto-check
+- Lançamento direto pelo gerenciador com ícone nativo
+- **Correção automática de HiDPI/4K** — detecção do fator de escala do monitor e aplicação de `-Dsun.java2d.uiScale` ao Java Swing para texto legível em monitores de alta resolução
+
+#### Sistemas Judiciais
+- Acesso rápido a PJe (TJBA 1ª e 2ª instância, TRF1), PROJUDI, e-SAJ, TRT5, TST e CNJ
+- Links diretos validados para cada tribunal
+
+#### Interface e Experiência
+- Interface nativa GTK4 + libadwaita seguindo as diretrizes GNOME HIG
+- 4 abas organizadas: Certificados A1, Tokens A3, Certificados (unificada) e Sistemas
+- Janela redimensionável com suporte a scroll em todas as views
+- Proteção por senha com PBKDF2-HMAC-SHA256 (600.000 iterações)
+- Diálogo Sobre com informações do projeto e equipe
+- Ícones universais compatíveis com todos os temas de ícones
+
+#### Empacotamento
+- PKGBUILD para Arch Linux / BigLinux / Manjaro e derivados
+- Arquivo `.desktop` para integração com o menu do sistema
+- Regras udev para detecção automática de tokens USB
+
+---
+
 ## Contribuindo
 
 Contribuições são bem-vindas! Abra uma issue ou envie um pull request.
@@ -308,7 +348,7 @@ Este projeto está licenciado sob a Licença MIT — veja o arquivo
 
 ## Créditos
 
-Desenvolvido para a comunidade [CommunityBig](https://communitybig.org/) e
+Desenvolvido para a comunidade [BigCommunity](https://communitybig.org/) e
 [BigLinux](https://www.biglinux.com.br/).
 
 Feito com cuidado para a comunidade jurídica brasileira no GNU/Linux
