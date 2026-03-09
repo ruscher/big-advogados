@@ -13,9 +13,7 @@ moderna.
 
 ## Visão Geral
 
-BigCertificados é um aplicativo GTK4/Adwaita criado para o ecossistema do [BigLinux](https://biglinux.com.br) e do 
-[CommunityBig](https://communitybig.org/) e distribuições Arch-based (BigLinux,
-Manjaro). Ele simplifica o uso de certificados digitais no Linux — uma tarefa
+BigCertificados é um aplicativo GTK4/Adwaita criado para o ecossistema do [BigLinux](https://biglinux.com.br) e do [CommunityBig](https://communitybig.org/) e distribuições Arch-based (EndeavourOS, CachyOS, Manjaro, Garuda Linux e outros). Ele simplifica o uso de certificados digitais no Linux — uma tarefa
 historicamente complexa para quem precisa acessar sistemas judiciais eletrônicos
 como PJe, PROJUDI e e-SAJ.
 
@@ -67,6 +65,8 @@ Acesso rápido com um clique aos principais sistemas:
 | PJe — CNJ | Portal do Conselho Nacional de Justiça |
 | PROJUDI — TJBA | Processo Judicial Digital (sistema legado) |
 | e-SAJ — TJBA | Sistema de Automação da Justiça — Consulta |
+
+Em breve serão adicionados outros sistemas processuais eletrônicos. 
 
 ### PJeOffice Pro
 
