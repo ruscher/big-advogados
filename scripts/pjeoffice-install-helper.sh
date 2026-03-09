@@ -33,12 +33,33 @@ rm -f "${INSTALL_DIR}/.gitignore"
 echo "LOG: Criando script de inicialização..."
 cat > "${INSTALL_DIR}/pjeoffice-pro.sh" << 'LAUNCHER'
 #!/bin/bash
+# Auto-detect HiDPI scale factor for Java Swing
+UI_SCALE="1"
+if command -v python3 &>/dev/null; then
+    DETECTED=$(python3 -c "
+import gi
+gi.require_version('Gdk', '4.0')
+from gi.repository import Gdk
+d = Gdk.Display.get_default()
+if d:
+    m = d.get_monitors()
+    if m.get_n_items() > 0:
+        print(m.get_item(0).get_scale_factor())
+    else:
+        print(1)
+else:
+    print(1)
+" 2>/dev/null)
+    [[ -n "${DETECTED}" ]] && UI_SCALE="${DETECTED}"
+fi
+
 exec /usr/lib/jvm/java-11-openjdk/bin/java \
     -XX:+UseG1GC \
     -XX:MinHeapFreeRatio=3 \
     -XX:MaxHeapFreeRatio=3 \
     -Xms20m \
     -Xmx2048m \
+    -Dsun.java2d.uiScale="${UI_SCALE}" \
     -Dpjeoffice_home="/usr/share/pjeoffice-pro/" \
     -Dffmpeg_home="/usr/share/pjeoffice-pro/" \
     -Dpjeoffice_looksandfeels="Metal" \

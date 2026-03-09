@@ -142,7 +142,7 @@ class SystemsView(Gtk.ScrolledWindow):
         )
 
         self._pjeoffice_row = Adw.ActionRow()
-        self._pjeoffice_row.set_icon_name("application-x-executable-symbolic")
+        self._pjeoffice_row.set_icon_name("pjeoffice")
         self._update_pjeoffice_status()
         pjeoffice_group.add(self._pjeoffice_row)
 
@@ -182,7 +182,7 @@ class SystemsView(Gtk.ScrolledWindow):
         install_row.set_subtitle(
             "Baixa do site oficial (CNJ/TRF3) e instala automaticamente"
         )
-        install_row.set_icon_name("folder-download-symbolic")
+        install_row.set_icon_name("pjeoffice")
         install_row.set_activatable(True)
         install_row.connect("activated", self._on_install_pjeoffice)
 
@@ -194,7 +194,7 @@ class SystemsView(Gtk.ScrolledWindow):
         self._launch_row = Adw.ActionRow()
         self._launch_row.set_title("Abrir PJeOffice Pro")
         self._launch_row.set_subtitle("Iniciar o assinador digital")
-        self._launch_row.set_icon_name("media-playback-start-symbolic")
+        self._launch_row.set_icon_name("pjeoffice")
         self._launch_row.set_activatable(True)
         self._launch_row.connect("activated", self._on_launch_pjeoffice)
         arrow2 = Gtk.Image.new_from_icon_name("go-next-symbolic")
