@@ -2,7 +2,7 @@
   <img src="data/icons/bigcertificados.svg" alt="BigCertificados" width="128" height="128">
 </p>
 
-# BigCertificados
+<h1 align="center">BigCertificados</h1>
 
 Gerenciador de certificados digitais para advogados e profissionais do Direito
 no GNU/Linux — certificados A1 (PFX/P12) e A3 (token USB) em uma interface nativa
