@@ -330,6 +330,31 @@ big-advogados/
 ### Arch Linux / BigLinux (recomendado)
 
 ```bash
+# Habilite o serviço de smart card (necessário para tokens A3)
+sudo systemctl enable --now pcscd.service
+
+# Clone o repositório
+git clone https://github.com/xathay/big-advogados.git
+cd big-advogados
+
+# Instale o pacote (resolve dependências automaticamente)
+makepkg -si
+```
+
+Após a instalação, o **BigCertificados** aparece automaticamente no menu de
+aplicativos do seu desktop (GNOME, KDE, XFCE, etc.). Não é necessário usar o
+terminal para abrir o app — basta clicar no ícone.
+
+> **O que o `makepkg -si` faz:**
+> - Compila o pacote a partir do `PKGBUILD`
+> - Instala todas as dependências via `pacman` (incluindo `python-endesive` do AUR se disponível)
+> - Instala o `.desktop`, ícones, regras udev e o executável `/usr/bin/big-certificados`
+
+### Modo desenvolvimento (sem instalar)
+
+Se preferir executar diretamente do código-fonte:
+
+```bash
 # Instale as dependências do sistema
 sudo pacman -S python python-gobject gtk4 libadwaita python-pykcs11 \
   python-pyudev python-cryptography python-pikepdf python-reportlab \
@@ -341,15 +366,17 @@ yay -S python-endesive
 # Habilite o serviço de smart card
 sudo systemctl enable --now pcscd.service
 
-# Clone o repositório
+# Clone e execute
 git clone https://github.com/xathay/big-advogados.git
 cd big-advogados
-
-# Execute
 python -m src.main
 ```
 
 ### Regras udev (acesso ao token sem sudo)
+
+> **Nota:** Se você instalou via `makepkg -si`, as regras udev já foram
+> instaladas automaticamente. Essa seção é apenas para quem roda no modo
+> desenvolvimento.
 
 ```bash
 sudo cp data/udev/70-crypto-tokens.rules /etc/udev/rules.d/
@@ -395,10 +422,11 @@ BigCertificados armazena seus dados seguindo a especificação XDG Base Director
 
 ## Uso
 
-Inicie pelo menu de aplicativos ou via terminal:
+Abra o **BigCertificados** pelo menu de aplicativos do seu desktop — ou, se
+preferir, via terminal:
 
 ```bash
-python -m src.main
+big-certificados
 ```
 
 1. **Tokens USB** — conecte seu token e ele será detectado automaticamente.
