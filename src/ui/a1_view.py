@@ -45,13 +45,13 @@ class A1CertificateView(Gtk.ScrolledWindow):
         content.append(self._status_page)
 
         # Load button
-        load_btn = Gtk.Button(label="Selecionar Arquivo PFX")
-        load_btn.add_css_class("suggested-action")
-        load_btn.add_css_class("pill")
-        load_btn.set_halign(Gtk.Align.CENTER)
-        load_btn.set_margin_top(8)
-        load_btn.connect("clicked", self._on_load_clicked)
-        content.append(load_btn)
+        self._load_btn = Gtk.Button(label="Selecionar Arquivo PFX")
+        self._load_btn.add_css_class("suggested-action")
+        self._load_btn.add_css_class("pill")
+        self._load_btn.set_halign(Gtk.Align.CENTER)
+        self._load_btn.set_margin_top(8)
+        self._load_btn.connect("clicked", self._on_load_clicked)
+        content.append(self._load_btn)
 
         # Certificate details (hidden initially)
         self._details_scroll = Gtk.ScrolledWindow()
@@ -81,6 +81,11 @@ class A1CertificateView(Gtk.ScrolledWindow):
         another_btn = Gtk.Button(label="Carregar Outro")
         another_btn.connect("clicked", self._on_load_clicked)
         self._actions_box.append(another_btn)
+
+        remove_btn = Gtk.Button(label="Remover Certificado")
+        remove_btn.add_css_class("destructive-action")
+        remove_btn.connect("clicked", self._on_remove_clicked)
+        self._actions_box.append(remove_btn)
 
         self.set_child(content)
 
@@ -214,15 +219,7 @@ class A1CertificateView(Gtk.ScrolledWindow):
     def _show_certificate(self, cert: CertificateInfo) -> None:
         """Display the loaded certificate details."""
         self._status_page.set_visible(False)
-
-        # Find and hide the load button
-        child = self.get_first_child()
-        while child:
-            if isinstance(child, Gtk.Button) and not isinstance(child, Gtk.MenuButton):
-                if child.get_label() == "Selecionar Arquivo PFX":
-                    child.set_visible(False)
-                    break
-            child = child.get_next_sibling()
+        self._load_btn.set_visible(False)
 
         self._details_scroll.set_visible(True)
         self._actions_box.set_visible(True)
@@ -288,6 +285,47 @@ class A1CertificateView(Gtk.ScrolledWindow):
             self._add_info_row(cert_group, "Uso da Chave", cert.key_usage)
 
         self._details_box.append(cert_group)
+
+    def _on_remove_clicked(self, _button: Gtk.Button) -> None:
+        """Remove the loaded certificate and reset the view."""
+        dialog = Adw.AlertDialog()
+        dialog.set_heading("Remover Certificado")
+        dialog.set_body(
+            "Deseja remover o certificado carregado?\n"
+            "O arquivo original no disco não será apagado."
+        )
+        dialog.add_response("cancel", "Cancelar")
+        dialog.add_response("remove", "Remover")
+        dialog.set_response_appearance("remove", Adw.ResponseAppearance.DESTRUCTIVE)
+        dialog.set_default_response("cancel")
+        dialog.set_close_response("cancel")
+        dialog.connect("response", self._on_remove_response)
+
+        window = self.get_root()
+        dialog.present(window)
+
+    def _on_remove_response(
+        self, dialog: Adw.AlertDialog, response: str,
+    ) -> None:
+        """Handle removal confirmation."""
+        if response != "remove":
+            return
+
+        self._current_pfx_path = None
+        self._current_password = None
+        self._cert_info = None
+
+        # Clear details
+        child = self._details_box.get_first_child()
+        while child:
+            next_child = child.get_next_sibling()
+            self._details_box.remove(child)
+            child = next_child
+
+        self._details_scroll.set_visible(False)
+        self._actions_box.set_visible(False)
+        self._status_page.set_visible(True)
+        self._load_btn.set_visible(True)
 
     def _on_install_browser_clicked(self, _button: Gtk.Button) -> None:
         """Install PFX certificate in browser NSS databases."""
