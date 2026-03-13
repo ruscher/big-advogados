@@ -1,4 +1,4 @@
-"""PDF digital signer using endesive — supports A1 (PFX) certificates."""
+"""PDF digital signer using endesive — supports A1 (PFX) and A3 (PKCS#11) certificates."""
 
 from __future__ import annotations
 
@@ -6,12 +6,15 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 from cryptography import x509
 from cryptography.hazmat.primitives.serialization import pkcs12
 
 from src.certificate.parser import CertificateInfo, parse_certificate
+
+if TYPE_CHECKING:
+    from src.certificate.a3_manager import A3Manager
 
 log = logging.getLogger(__name__)
 
@@ -177,6 +180,186 @@ def sign_pdf(
     except Exception as exc:
         log.error("PDF signing failed: %s", exc, exc_info=True)
         return SignatureResult(pdf_path, output_path, False, str(exc))
+
+
+class _PKCS11HSM:
+    """HSM adapter for endesive — signs via PKCS#11 token session."""
+
+    def __init__(self, session: object, cert_der: bytes) -> None:
+        self._session = session
+        self._cert_der = cert_der
+        self._key_id: object = None
+
+        import PyKCS11
+        # Find the private key on the token
+        priv_keys = session.findObjects([  # type: ignore[union-attr]
+            (PyKCS11.CKA_CLASS, PyKCS11.CKO_PRIVATE_KEY),
+        ])
+        if priv_keys:
+            self._priv_key = priv_keys[0]
+        else:
+            self._priv_key = None
+
+    def certificate(self) -> tuple:
+        """Return (key_id, certificate_der_bytes)."""
+        return (self._priv_key, self._cert_der)
+
+    def sign(self, keyid: object, data: bytes, hashalgo: str) -> bytes:
+        """Sign data using PKCS#11 C_Sign mechanism."""
+        import PyKCS11
+
+        mech_map = {
+            "sha256": PyKCS11.CKM_SHA256_RSA_PKCS,
+            "sha384": PyKCS11.CKM_SHA384_RSA_PKCS,
+            "sha512": PyKCS11.CKM_SHA512_RSA_PKCS,
+            "sha1": PyKCS11.CKM_SHA1_RSA_PKCS,
+        }
+
+        mechanism = PyKCS11.Mechanism(
+            mech_map.get(hashalgo, PyKCS11.CKM_SHA256_RSA_PKCS), None,
+        )
+
+        signature = self._session.sign(  # type: ignore[union-attr]
+            self._priv_key, data, mechanism,
+        )
+        return bytes(bytearray(signature))
+
+
+def sign_pdf_a3(
+    pdf_path: str,
+    a3_manager: A3Manager,
+    cert_der: bytes,
+    output_path: str,
+    options: Optional[SignatureOptions] = None,
+) -> SignatureResult:
+    """Sign a PDF file using an A3 token (PKCS#11).
+
+    Args:
+        pdf_path: Path to the PDF to sign.
+        a3_manager: A3Manager with active session.
+        cert_der: DER-encoded certificate bytes from token.
+        output_path: Path for the signed PDF output.
+        options: Signature appearance and metadata options.
+
+    Returns:
+        SignatureResult with success status and details.
+    """
+    if options is None:
+        options = SignatureOptions()
+
+    pdf_file = Path(pdf_path)
+
+    if not pdf_file.is_file():
+        return SignatureResult(pdf_path, output_path, False, "Arquivo PDF não encontrado")
+
+    if a3_manager._session is None:
+        return SignatureResult(
+            pdf_path, output_path, False,
+            "Sessão com o token não está ativa — reinsira o token",
+        )
+
+    # Parse the certificate from token
+    try:
+        certificate = x509.load_der_x509_certificate(cert_der)
+        cert_info = parse_certificate(certificate)
+    except Exception as exc:
+        log.error("Failed to parse A3 certificate: %s", exc)
+        return SignatureResult(pdf_path, output_path, False, "Certificado do token inválido")
+
+    if cert_info.is_expired:
+        return SignatureResult(
+            pdf_path, output_path, False,
+            f"Certificado expirado em {cert_info.not_after:%d/%m/%Y}",
+            cert_info,
+        )
+
+    try:
+        pdf_bytes = pdf_file.read_bytes()
+
+        # Determine signature page
+        sig_page = options.page
+        if sig_page == -1:
+            sig_page = _count_pdf_pages(pdf_bytes) - 1
+            if sig_page < 0:
+                sig_page = 0
+
+        now = datetime.now(timezone.utc)
+        local_now = datetime.now().astimezone()
+        signing_date = now.strftime("D:%Y%m%d%H%M%S+00'00'")
+
+        # Signature box: A4 = 595 x 842 pt
+        margin = 20
+        box_height = 80
+        box_width = 360
+
+        if options.position == "bottom":
+            sig_box = (margin, margin, margin + box_width, margin + box_height)
+        else:
+            sig_box = (margin, 842 - margin - box_height, margin + box_width, 842 - margin)
+
+        udct = {
+            "sigflags": 3,
+            "sigpage": sig_page,
+            "sigfield": "Signature1",
+            "auto_sigfield": True,
+            "sigandcertify": True,
+            "contact": options.contact or cert_info.email or "",
+            "location": options.location,
+            "signingdate": signing_date,
+            "reason": options.reason,
+            "aligned": 0,
+        }
+
+        if options.visible:
+            from src.certificate.stamp import generate_stamp_image
+            import tempfile
+
+            stamp_img = generate_stamp_image(
+                cert_info, local_now, reason=options.reason,
+            )
+            tmp_stamp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+            stamp_img.save(tmp_stamp.name, format="PNG")
+            tmp_stamp.close()
+            udct["signaturebox"] = sig_box
+            udct["signature_img"] = tmp_stamp.name
+            udct["signature_img_distort"] = False
+            udct["signature_img_centred"] = True
+
+        # Create PKCS#11 HSM adapter for endesive
+        hsm = _PKCS11HSM(a3_manager._session, cert_der)
+
+        from endesive.pdf import cms as pdf_cms
+
+        signed_data = pdf_cms.sign(
+            pdf_bytes, udct,
+            None, None, [],
+            algomd="sha256",
+            hsm=hsm,
+        )
+
+        out = Path(output_path)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        with open(out, "wb") as f:
+            f.write(pdf_bytes)
+            f.write(signed_data)
+
+        # Clean up temp stamp file
+        if options.visible:
+            try:
+                import os
+                os.unlink(tmp_stamp.name)
+            except OSError:
+                pass
+
+        log.info("PDF signed (A3): %s -> %s", pdf_path, output_path)
+        return SignatureResult(pdf_path, output_path, True, cert_info=cert_info)
+
+    except Exception as exc:
+        log.error("PDF A3 signing failed: %s", exc, exc_info=True)
+        error_msg = str(exc)
+        if "CKR_" in error_msg:
+            error_msg = f"Erro no token: {error_msg}"
+        return SignatureResult(pdf_path, output_path, False, error_msg)
 
 
 def batch_sign(

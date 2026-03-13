@@ -118,7 +118,7 @@ class MainWindow(Adw.ApplicationWindow):
         )
 
         # Signer View
-        self._signer_view = SignerView()
+        self._signer_view = SignerView(a3_manager=self._a3_manager)
         self._view_stack.add_titled_with_icon(
             self._signer_view, "signer", "Assinador",
             "document-edit-symbolic",

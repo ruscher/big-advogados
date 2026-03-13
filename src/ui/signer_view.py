@@ -18,22 +18,34 @@ from src.certificate.pdf_signer import (
     SignatureResult,
     batch_sign,
     sign_pdf,
+    sign_pdf_a3,
 )
+from src.certificate.a3_manager import A3Manager, TokenSlotInfo
+from src.certificate.parser import CertificateInfo
 from src.browser.nss_config import import_pfx_chain_for_papers
 
 log = logging.getLogger(__name__)
+
+CERT_TYPE_A1 = 0
+CERT_TYPE_A3 = 1
 
 
 class SignerView(Gtk.ScrolledWindow):
     """View for signing PDFs with digital certificates."""
 
-    def __init__(self) -> None:
+    def __init__(self, a3_manager: Optional[A3Manager] = None) -> None:
         super().__init__()
         self.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
 
         self._pdf_paths: list[str] = []
         self._pfx_path: Optional[str] = None
         self._pfx_password: Optional[str] = None
+        self._cert_type: int = CERT_TYPE_A1
+        self._a3_manager: Optional[A3Manager] = a3_manager
+        self._a3_slot_id: Optional[int] = None
+        self._a3_pin: Optional[str] = None
+        self._a3_cert_info: Optional[CertificateInfo] = None
+        self._a3_cert_der: Optional[bytes] = None
         self._signing_in_progress = False
 
         self._content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
@@ -54,7 +66,7 @@ class SignerView(Gtk.ScrolledWindow):
         self._status_page.set_icon_name("document-edit-symbolic")
         self._status_page.set_title("Assinador de PDF")
         self._status_page.set_description(
-            "Assine documentos PDF com seu certificado digital A1.\n"
+            "Assine documentos PDF com certificado digital A1 ou token A3.\n"
             "Selecione os arquivos PDF e o certificado para começar."
         )
         self._content.append(self._status_page)
@@ -101,9 +113,24 @@ class SignerView(Gtk.ScrolledWindow):
         # ── Certificate section ──
         cert_group = Adw.PreferencesGroup()
         cert_group.set_title("Certificado Digital")
-        cert_group.set_description("Certificado A1 (PFX/P12) para assinatura")
+        cert_group.set_description("Selecione o tipo e o certificado para assinatura")
         self._form_box.append(cert_group)
 
+        # Certificate type selector
+        self._cert_type_row = Adw.ComboRow()
+        self._cert_type_row.set_title("Tipo de Certificado")
+        self._cert_type_row.set_subtitle("Escolha o tipo de certificado digital")
+        self._cert_type_row.set_icon_name("dialog-password-symbolic")
+        type_model = Gtk.StringList.new([
+            "Certificado A1 (PFX/P12)",
+            "Token A3 (Smart Card)",
+        ])
+        self._cert_type_row.set_model(type_model)
+        self._cert_type_row.set_selected(CERT_TYPE_A1)
+        self._cert_type_row.connect("notify::selected", self._on_cert_type_changed)
+        cert_group.add(self._cert_type_row)
+
+        # Certificate row
         self._cert_row = Adw.ActionRow()
         self._cert_row.set_title("Nenhum certificado selecionado")
         self._cert_row.set_subtitle("Clique para selecionar o arquivo PFX")
@@ -117,7 +144,19 @@ class SignerView(Gtk.ScrolledWindow):
         change_cert_btn.set_valign(Gtk.Align.CENTER)
         change_cert_btn.add_css_class("flat")
         change_cert_btn.connect("clicked", self._on_select_cert_clicked)
+        self._change_cert_btn = change_cert_btn
         self._cert_row.add_suffix(change_cert_btn)
+
+        # Remove certificate button (hidden by default)
+        self._remove_cert_btn = Gtk.Button()
+        self._remove_cert_btn.set_icon_name("edit-clear-symbolic")
+        self._remove_cert_btn.set_tooltip_text("Remover certificado")
+        self._remove_cert_btn.set_valign(Gtk.Align.CENTER)
+        self._remove_cert_btn.add_css_class("flat")
+        self._remove_cert_btn.add_css_class("error")
+        self._remove_cert_btn.set_visible(False)
+        self._remove_cert_btn.connect("clicked", self._on_remove_cert_clicked)
+        self._cert_row.add_suffix(self._remove_cert_btn)
 
         cert_group.add(self._cert_row)
 
@@ -315,9 +354,56 @@ class SignerView(Gtk.ScrolledWindow):
         self._update_pdf_list()
         self._transition_to_empty()
 
+    # ── Certificate type switching ─────────────────────────────
+
+    def _on_cert_type_changed(self, row: Adw.ComboRow, _pspec: object) -> None:
+        """Handle certificate type change between A1 and A3."""
+        self._cert_type = row.get_selected()
+        self._clear_certificate_state()
+
+        if self._cert_type == CERT_TYPE_A1:
+            self._cert_row.set_subtitle("Clique para selecionar o arquivo PFX")
+            self._change_cert_btn.set_icon_name("document-open-symbolic")
+            self._change_cert_btn.set_tooltip_text("Selecionar certificado")
+        else:
+            self._cert_row.set_subtitle("Clique para detectar o token A3")
+            self._change_cert_btn.set_icon_name("media-removable-symbolic")
+            self._change_cert_btn.set_tooltip_text("Detectar token")
+
+    def _on_remove_cert_clicked(self, _btn: Gtk.Button) -> None:
+        """Remove the currently selected certificate."""
+        self._clear_certificate_state()
+
+    def _clear_certificate_state(self) -> None:
+        """Reset all certificate state to unselected."""
+        self._pfx_path = None
+        self._pfx_password = None
+        self._a3_slot_id = None
+        self._a3_pin = None
+        self._a3_cert_info = None
+        self._a3_cert_der = None
+
+        self._cert_row.set_title("Nenhum certificado selecionado")
+        self._cert_row.set_icon_name("application-certificate-symbolic")
+        self._remove_cert_btn.set_visible(False)
+
+        if self._cert_type == CERT_TYPE_A1:
+            self._cert_row.set_subtitle("Clique para selecionar o arquivo PFX")
+        else:
+            self._cert_row.set_subtitle("Clique para detectar o token A3")
+
+        self._update_sign_button_state()
+
     # ── Certificate selection ────────────────────────────────────
 
     def _on_select_cert_clicked(self, _widget: Gtk.Widget) -> None:
+        """Route certificate selection based on type."""
+        if self._cert_type == CERT_TYPE_A1:
+            self._select_a1_cert()
+        else:
+            self._select_a3_cert()
+
+    def _select_a1_cert(self) -> None:
         """Open file chooser for PFX/P12 certificate."""
         dialog = Gtk.FileDialog()
         dialog.set_title("Selecionar Certificado A1 (PFX)")
@@ -408,12 +494,13 @@ class SignerView(Gtk.ScrolledWindow):
                 GLib.idle_add(on_validate_result, cert_info, password)
 
             def on_validate_result(
-                cert_info: object, pwd: str,
+                cert_info: Optional[CertificateInfo], pwd: str,
             ) -> bool:
                 if cert_info is not None:
                     self._pfx_path = pfx_path
                     self._pfx_password = pwd
                     self._update_cert_row(cert_info)
+                    self._remove_cert_btn.set_visible(True)
                     dialog.close()
                 else:
                     error_label.set_label("Senha incorreta ou arquivo inválido")
@@ -434,11 +521,8 @@ class SignerView(Gtk.ScrolledWindow):
         window = self.get_root()
         dialog.present(window)
 
-    def _update_cert_row(self, cert_info: object) -> None:
+    def _update_cert_row(self, cert_info: CertificateInfo) -> None:
         """Update the certificate row with loaded certificate info."""
-        from src.certificate.parser import CertificateInfo
-        if not isinstance(cert_info, CertificateInfo):
-            return
 
         holder = cert_info.holder_name or cert_info.common_name
         self._cert_row.set_title(holder)
@@ -451,7 +535,12 @@ class SignerView(Gtk.ScrolledWindow):
         if cert_info.issuer_cn:
             subtitle_parts.append(f"AC: {cert_info.issuer_cn}")
 
-        self._cert_row.set_subtitle(" | ".join(subtitle_parts) if subtitle_parts else os.path.basename(self._pfx_path or ""))
+        if self._cert_type == CERT_TYPE_A1:
+            fallback = os.path.basename(self._pfx_path or "")
+        else:
+            fallback = "Token A3"
+
+        self._cert_row.set_subtitle(" | ".join(subtitle_parts) if subtitle_parts else fallback)
 
         # Validity indicator
         if cert_info.is_expired:
@@ -461,7 +550,224 @@ class SignerView(Gtk.ScrolledWindow):
         else:
             self._cert_row.set_icon_name("emblem-ok-symbolic")
 
+        self._remove_cert_btn.set_visible(True)
         self._update_sign_button_state()
+
+    # ── A3 Token selection ───────────────────────────────────────
+
+    def _select_a3_cert(self) -> None:
+        """Detect A3 tokens and let the user select a certificate."""
+        mgr = self._a3_manager
+        if mgr is None or not mgr.is_available:
+            self._cert_row.set_subtitle("Suporte a token A3 indisponível (PyKCS11)")
+            return
+
+        self._cert_row.set_subtitle("Detectando tokens...")
+        self._cert_row.set_sensitive(False)
+
+        def detect_thread() -> None:
+            module = mgr.try_all_modules()
+            if module:
+                slots = mgr.get_slots()
+            else:
+                slots = []
+            GLib.idle_add(on_detect_done, slots)
+
+        def on_detect_done(slots: list) -> bool:
+            self._cert_row.set_sensitive(True)
+
+            if not slots:
+                self._cert_row.set_subtitle(
+                    "Nenhum token detectado — insira o token e tente novamente"
+                )
+                return False
+
+            if len(slots) == 1:
+                self._a3_prompt_pin(slots[0])
+            else:
+                self._a3_select_slot(slots)
+            return False
+
+        threading.Thread(target=detect_thread, daemon=True).start()
+
+    def _a3_select_slot(self, slots: list) -> None:
+        """Show slot/token selection when multiple tokens found."""
+        dialog = Adw.Dialog()
+        dialog.set_title("Selecionar Token")
+        dialog.set_content_width(400)
+        dialog.set_content_height(300)
+
+        toolbar = Adw.ToolbarView()
+        header = Adw.HeaderBar()
+        toolbar.add_top_bar(header)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        box.set_margin_top(16)
+        box.set_margin_bottom(16)
+        box.set_margin_start(16)
+        box.set_margin_end(16)
+
+        desc = Gtk.Label(label="Vários tokens detectados. Selecione um:")
+        desc.add_css_class("dim-label")
+        box.append(desc)
+
+        list_box = Gtk.ListBox()
+        list_box.set_selection_mode(Gtk.SelectionMode.NONE)
+        list_box.add_css_class("boxed-list")
+
+        for slot in slots:
+            row = Adw.ActionRow()
+            row.set_title(slot.label or f"Slot {slot.slot_id}")
+            row.set_subtitle(f"{slot.manufacturer} — {slot.model}")
+            row.set_icon_name("drive-removable-media-symbolic")
+            row.set_activatable(True)
+            row.connect("activated", lambda _r, s=slot, d=dialog: (
+                d.close(), self._a3_prompt_pin(s),
+            ))
+            list_box.append(row)
+
+        box.append(list_box)
+        toolbar.set_content(box)
+        dialog.set_child(toolbar)
+
+        window = self.get_root()
+        dialog.present(window)
+
+    def _a3_prompt_pin(self, slot: TokenSlotInfo) -> None:
+        """Ask for the token PIN and authenticate."""
+        from src.ui.pin_dialog import PinDialog
+
+        mgr = self._a3_manager
+        if mgr is None:
+            return
+
+        pin_dialog = PinDialog(token_label=slot.label or f"Slot {slot.slot_id}")
+
+        def on_pin_closed(_dialog: object) -> None:
+            if not pin_dialog.confirmed or not pin_dialog.pin:
+                return
+
+            pin = pin_dialog.pin
+            self._cert_row.set_subtitle("Autenticando no token...")
+            self._cert_row.set_sensitive(False)
+
+            def login_thread() -> None:
+                success = mgr.login(slot.slot_id, pin)
+                if success:
+                    certs = mgr.list_certificates()
+                else:
+                    certs = []
+                GLib.idle_add(on_login_done, success, certs, pin, slot.slot_id)
+
+            def on_login_done(
+                success: bool, certs: list, pin: str, slot_id: int,
+            ) -> bool:
+                self._cert_row.set_sensitive(True)
+
+                if not success:
+                    self._cert_row.set_subtitle("PIN incorreto ou falha na autenticação")
+                    return False
+
+                if not certs:
+                    self._cert_row.set_subtitle("Nenhum certificado encontrado no token")
+                    mgr.logout()
+                    return False
+
+                # Store A3 state
+                self._a3_slot_id = slot_id
+                self._a3_pin = pin
+
+                if len(certs) == 1:
+                    self._a3_cert_info = certs[0]
+                    self._a3_cert_der = self._get_a3_cert_der()
+                    self._update_cert_row(certs[0])
+                else:
+                    self._a3_select_certificate(certs)
+
+                return False
+
+            threading.Thread(target=login_thread, daemon=True).start()
+
+        pin_dialog.connect("closed", on_pin_closed)
+        window = self.get_root()
+        pin_dialog.present(window)
+
+    def _a3_select_certificate(self, certs: list) -> None:
+        """Let user pick a certificate when token has multiple."""
+        dialog = Adw.Dialog()
+        dialog.set_title("Selecionar Certificado")
+        dialog.set_content_width(400)
+        dialog.set_content_height(350)
+
+        toolbar = Adw.ToolbarView()
+        header = Adw.HeaderBar()
+        toolbar.add_top_bar(header)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        box.set_margin_top(16)
+        box.set_margin_bottom(16)
+        box.set_margin_start(16)
+        box.set_margin_end(16)
+
+        desc = Gtk.Label(label="Vários certificados encontrados. Selecione:")
+        desc.add_css_class("dim-label")
+        box.append(desc)
+
+        list_box = Gtk.ListBox()
+        list_box.set_selection_mode(Gtk.SelectionMode.NONE)
+        list_box.add_css_class("boxed-list")
+
+        for cert in certs:
+            row = Adw.ActionRow()
+            holder = cert.holder_name or cert.common_name
+            row.set_title(holder)
+            parts = []
+            if cert.cpf:
+                parts.append(f"CPF: {cert.cpf}")
+            if cert.oab:
+                parts.append(f"OAB: {cert.oab}")
+            row.set_subtitle(" | ".join(parts) if parts else "")
+            row.set_icon_name("application-certificate-symbolic")
+            row.set_activatable(True)
+            row.connect("activated", lambda _r, c=cert, d=dialog: (
+                d.close(),
+                setattr(self, '_a3_cert_info', c),
+                setattr(self, '_a3_cert_der', self._get_a3_cert_der()),
+                self._update_cert_row(c),
+            ))
+            list_box.append(row)
+
+        box.append(list_box)
+        toolbar.set_content(box)
+        dialog.set_child(toolbar)
+
+        window = self.get_root()
+        dialog.present(window)
+
+    def _get_a3_cert_der(self) -> Optional[bytes]:
+        """Get the DER bytes of the currently selected A3 certificate."""
+        if self._a3_manager is None or not self._a3_cert_info:
+            return None
+        try:
+            if self._a3_manager._session is None:
+                return None
+            import PyKCS11
+            session = self._a3_manager._session
+            objects = session.findObjects([
+                (PyKCS11.CKA_CLASS, PyKCS11.CKO_CERTIFICATE),
+            ])
+            for obj in objects:
+                attrs = session.getAttributeValue(obj, [PyKCS11.CKA_VALUE])
+                der_bytes = bytes(attrs[0])
+                from cryptography import x509
+                cert = x509.load_der_x509_certificate(der_bytes)
+                from src.certificate.parser import parse_certificate
+                info = parse_certificate(cert)
+                if info.common_name == self._a3_cert_info.common_name:
+                    return der_bytes
+        except Exception as exc:
+            log.error("Failed to get A3 certificate DER: %s", exc)
+        return None
 
     # ── State transitions ────────────────────────────────────────
 
@@ -479,12 +785,18 @@ class SignerView(Gtk.ScrolledWindow):
 
     def _update_sign_button_state(self) -> None:
         """Enable/disable sign button based on current state."""
-        can_sign = (
-            len(self._pdf_paths) > 0
-            and self._pfx_path is not None
-            and self._pfx_password is not None
-            and not self._signing_in_progress
-        )
+        has_pdfs = len(self._pdf_paths) > 0
+
+        if self._cert_type == CERT_TYPE_A1:
+            has_cert = self._pfx_path is not None and self._pfx_password is not None
+        else:
+            has_cert = (
+                self._a3_cert_info is not None
+                and self._a3_pin is not None
+                and self._a3_slot_id is not None
+            )
+
+        can_sign = has_pdfs and has_cert and not self._signing_in_progress
         self._sign_btn.set_sensitive(can_sign)
 
         count = len(self._pdf_paths)
@@ -497,8 +809,15 @@ class SignerView(Gtk.ScrolledWindow):
 
     def _on_sign_clicked(self, _btn: Gtk.Button) -> None:
         """Start the signing process."""
-        if not self._pdf_paths or not self._pfx_path or not self._pfx_password:
+        if not self._pdf_paths:
             return
+
+        if self._cert_type == CERT_TYPE_A1:
+            if not self._pfx_path or not self._pfx_password:
+                return
+        else:
+            if not self._a3_cert_der or not self._a3_pin or self._a3_manager is None:
+                return
 
         self._signing_in_progress = True
         self._sign_btn.set_sensitive(False)
@@ -524,9 +843,21 @@ class SignerView(Gtk.ScrolledWindow):
             page=self._get_selected_page(),
         )
 
-        pfx_path = self._pfx_path
-        pfx_password = self._pfx_password
         pdf_paths = list(self._pdf_paths)
+        cert_type = self._cert_type
+
+        # Capture signing parameters
+        pfx_path: Optional[str] = None
+        pfx_password: Optional[str] = None
+        a3_manager: Optional[A3Manager] = None
+        a3_cert_der: Optional[bytes] = None
+
+        if cert_type == CERT_TYPE_A1:
+            pfx_path = self._pfx_path
+            pfx_password = self._pfx_password
+        else:
+            a3_manager = self._a3_manager
+            a3_cert_der = self._a3_cert_der
 
         def signing_thread() -> None:
             results: list[SignatureResult] = []
@@ -542,10 +873,16 @@ class SignerView(Gtk.ScrolledWindow):
                 p = Path(pdf_path)
                 output = str(p.parent / f"{p.stem}_assinado{p.suffix}")
 
-                result = sign_pdf(
-                    pdf_path, pfx_path, pfx_password,
-                    output, options,
-                )
+                if cert_type == CERT_TYPE_A1:
+                    result = sign_pdf(
+                        pdf_path, pfx_path, pfx_password,
+                        output, options,
+                    )
+                else:
+                    result = sign_pdf_a3(
+                        pdf_path, a3_manager, a3_cert_der,
+                        output, options,
+                    )
                 results.append(result)
 
             GLib.idle_add(self._on_signing_done, results)
@@ -707,14 +1044,11 @@ class SignerView(Gtk.ScrolledWindow):
     def reset(self) -> None:
         """Reset the view to initial state."""
         self._pdf_paths.clear()
-        self._pfx_path = None
-        self._pfx_password = None
         self._signing_in_progress = False
+        self._clear_certificate_state()
+        self._cert_type_row.set_selected(CERT_TYPE_A1)
         self._update_pdf_list()
         self._transition_to_empty()
-        self._cert_row.set_title("Nenhum certificado selecionado")
-        self._cert_row.set_subtitle("Clique para selecionar o arquivo PFX")
-        self._cert_row.set_icon_name("application-certificate-symbolic")
 
 
 def _format_size(size_bytes: int) -> str:
