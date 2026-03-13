@@ -73,23 +73,11 @@ mv "${TMP_DIR}/pjeoffice-pro" "${INSTALL_DIR}"
 cat > "${INSTALL_DIR}/pjeoffice-pro.sh" << 'LAUNCHER'
 #!/bin/bash
 # Auto-detect HiDPI scale factor for Java Swing
+# Uses Xft.dpi from X resources (works on both X11 and Wayland/XWayland)
 UI_SCALE="1"
-if command -v python3 &>/dev/null; then
-    DETECTED=$(python3 -c "
-import gi
-gi.require_version('Gdk', '4.0')
-from gi.repository import Gdk
-d = Gdk.Display.get_default()
-if d:
-    m = d.get_monitors()
-    if m.get_n_items() > 0:
-        print(m.get_item(0).get_scale_factor())
-    else:
-        print(1)
-else:
-    print(1)
-" 2>/dev/null)
-    [[ -n "${DETECTED}" ]] && UI_SCALE="${DETECTED}"
+DPI=$(xrdb -query 2>/dev/null | awk '/Xft\.dpi:/{print $2}')
+if [[ -n "${DPI}" ]] && [[ "${DPI}" -gt 96 ]]; then
+    UI_SCALE=$(awk "BEGIN{s=${DPI}/96; if(s==int(s)) printf \"%d\",s; else printf \"%.2f\",s}")
 fi
 
 exec /usr/lib/jvm/java-11-openjdk/bin/java \

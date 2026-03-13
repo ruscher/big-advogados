@@ -66,6 +66,8 @@ EOF
         "${_appdir}/scripts/install-pjeoffice-pro.sh"
     install -Dm755 "${srcdir}/../scripts/pjeoffice-install-helper.sh" \
         "${_appdir}/scripts/pjeoffice-install-helper.sh"
+    install -Dm755 "${srcdir}/../scripts/pjeoffice-uninstall-helper.sh" \
+        "${_appdir}/scripts/pjeoffice-uninstall-helper.sh"
 
     # License
     install -Dm644 "${srcdir}/../LICENSE" \

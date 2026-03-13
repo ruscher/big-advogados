@@ -197,6 +197,7 @@ class SystemsView(Gtk.ScrolledWindow):
 
         self._pjeoffice_row = Adw.ActionRow()
         self._pjeoffice_row.set_icon_name("pjeoffice")
+        self._pjeoffice_status_icon: Optional[Gtk.Image] = None
         self._update_pjeoffice_status()
         pjeoffice_group.add(self._pjeoffice_row)
 
@@ -204,6 +205,7 @@ class SystemsView(Gtk.ScrolledWindow):
         self._update_row = Adw.ActionRow()
         self._update_row.set_icon_name("software-update-available-symbolic")
         self._update_row.set_visible(False)
+        self._update_status_icon: Optional[Gtk.Image] = None
         pjeoffice_group.add(self._update_row)
 
         # Check for updates button
@@ -230,19 +232,20 @@ class SystemsView(Gtk.ScrolledWindow):
         auto_check_row.connect("notify::active", self._on_auto_check_toggled)
         pjeoffice_group.add(auto_check_row)
 
-        # Install button
-        install_row = Adw.ActionRow()
-        install_row.set_title("Instalar PJeOffice Pro")
-        install_row.set_subtitle(
+        # Install button (hidden when already installed)
+        self._install_row = Adw.ActionRow()
+        self._install_row.set_title("Instalar PJeOffice Pro")
+        self._install_row.set_subtitle(
             "Baixa do site oficial (CNJ/TRF3) e instala automaticamente"
         )
-        install_row.set_icon_name("pjeoffice")
-        install_row.set_activatable(True)
-        install_row.connect("activated", self._on_install_pjeoffice)
+        self._install_row.set_icon_name("pjeoffice")
+        self._install_row.set_activatable(True)
+        self._install_row.connect("activated", self._on_install_pjeoffice)
 
         arrow = Gtk.Image.new_from_icon_name("go-next-symbolic")
-        install_row.add_suffix(arrow)
-        pjeoffice_group.add(install_row)
+        self._install_row.add_suffix(arrow)
+        self._install_row.set_visible(not self._is_pjeoffice_installed())
+        pjeoffice_group.add(self._install_row)
 
         # Launch button (if installed)
         self._launch_row = Adw.ActionRow()
@@ -255,6 +258,18 @@ class SystemsView(Gtk.ScrolledWindow):
         self._launch_row.add_suffix(arrow2)
         self._launch_row.set_visible(self._is_pjeoffice_installed())
         pjeoffice_group.add(self._launch_row)
+
+        # Remove button (visible only when installed)
+        self._remove_row = Adw.ActionRow()
+        self._remove_row.set_title("Remover PJeOffice Pro")
+        self._remove_row.set_subtitle("Remove completamente do sistema")
+        self._remove_row.set_icon_name("user-trash-symbolic")
+        self._remove_row.set_activatable(True)
+        self._remove_row.connect("activated", self._on_remove_pjeoffice)
+        arrow_rm = Gtk.Image.new_from_icon_name("go-next-symbolic")
+        self._remove_row.add_suffix(arrow_rm)
+        self._remove_row.set_visible(self._is_pjeoffice_installed())
+        pjeoffice_group.add(self._remove_row)
 
         content.append(pjeoffice_group)
 
@@ -305,23 +320,29 @@ class SystemsView(Gtk.ScrolledWindow):
         )
 
     def _update_pjeoffice_status(self) -> None:
+        # Remove previous status icon before adding new one
+        if self._pjeoffice_status_icon is not None:
+            self._pjeoffice_row.remove(self._pjeoffice_status_icon)
+            self._pjeoffice_status_icon = None
+
         if self._is_pjeoffice_installed():
             version = get_installed_pjeoffice_version() or "?"
             self._pjeoffice_row.set_title(f"PJeOffice Pro — Instalado (v{version})")
             self._pjeoffice_row.set_subtitle("Pronto para assinar documentos")
 
-            check = Gtk.Image.new_from_icon_name("emblem-ok-symbolic")
-            check.add_css_class("success")
-            self._pjeoffice_row.add_suffix(check)
+            icon = Gtk.Image.new_from_icon_name("emblem-ok-symbolic")
+            icon.add_css_class("success")
         else:
             self._pjeoffice_row.set_title("PJeOffice Pro — Não instalado")
             self._pjeoffice_row.set_subtitle(
                 "Necessário para acessar os sistemas PJe com certificado digital"
             )
 
-            warn = Gtk.Image.new_from_icon_name("dialog-warning-symbolic")
-            warn.add_css_class("warning")
-            self._pjeoffice_row.add_suffix(warn)
+            icon = Gtk.Image.new_from_icon_name("dialog-warning-symbolic")
+            icon.add_css_class("warning")
+
+        self._pjeoffice_status_icon = icon
+        self._pjeoffice_row.add_suffix(icon)
 
     def _on_install_pjeoffice(self, _row: Adw.ActionRow) -> None:
         """Open the PJeOffice Pro installer dialog."""
@@ -331,17 +352,41 @@ class SystemsView(Gtk.ScrolledWindow):
         window = self.get_root()
         dialog.present(window)
 
+    def _on_remove_pjeoffice(self, _row: Adw.ActionRow) -> None:
+        """Confirm and remove PJeOffice Pro."""
+        window = self.get_root()
+
+        confirm = Adw.AlertDialog()
+        confirm.set_heading("Remover PJeOffice Pro?")
+        confirm.set_body(
+            "O PJeOffice Pro será removido completamente do sistema.\n"
+            "Você poderá reinstalá-lo a qualquer momento pelo BigCertificados."
+        )
+        confirm.add_response("cancel", "Cancelar")
+        confirm.add_response("remove", "Remover")
+        confirm.set_response_appearance("remove", Adw.ResponseAppearance.DESTRUCTIVE)
+        confirm.set_default_response("cancel")
+        confirm.set_close_response("cancel")
+        confirm.connect("response", self._on_remove_confirmed)
+        confirm.present(window)
+
+    def _on_remove_confirmed(self, _dialog: Adw.AlertDialog, response: str) -> None:
+        """Handle confirmation dialog response."""
+        if response != "remove":
+            return
+        from src.ui.pjeoffice_installer import PJeOfficeUninstallerDialog
+
+        dialog = PJeOfficeUninstallerDialog(on_removed=self._refresh_pjeoffice_status)
+        window = self.get_root()
+        dialog.present(window)
+
     def _refresh_pjeoffice_status(self) -> None:
-        """Refresh the PJeOffice row after installation."""
-        # Clear old suffixes
-        child = self._pjeoffice_row.get_first_child()
-        while child:
-            next_c = child.get_next_sibling()
-            if isinstance(child, Gtk.Image):
-                self._pjeoffice_row.remove(child)
-            child = next_c
+        """Refresh the PJeOffice row after installation or removal."""
         self._update_pjeoffice_status()
-        self._launch_row.set_visible(self._is_pjeoffice_installed())
+        installed = self._is_pjeoffice_installed()
+        self._install_row.set_visible(not installed)
+        self._launch_row.set_visible(installed)
+        self._remove_row.set_visible(installed)
 
     # ── PJeOffice update checking ──
 
@@ -362,13 +407,10 @@ class SystemsView(Gtk.ScrolledWindow):
         self._update_row.set_title("Verificando…")
         self._update_row.set_subtitle("Consultando site oficial do CNJ")
 
-        # Clear old suffix icons
-        child = self._update_row.get_first_child()
-        while child:
-            next_c = child.get_next_sibling()
-            if isinstance(child, Gtk.Image):
-                self._update_row.remove(child)
-            child = next_c
+        # Remove previous update status icon
+        if self._update_status_icon is not None:
+            self._update_row.remove(self._update_status_icon)
+            self._update_status_icon = None
 
         check_pjeoffice_updates_async(version, self._on_pjeoffice_update_result)
 
@@ -380,13 +422,10 @@ class SystemsView(Gtk.ScrolledWindow):
         """Handle PJeOffice update check result."""
         self._check_spinner.stop()
 
-        # Clear old suffix icons
-        child = self._update_row.get_first_child()
-        while child:
-            next_c = child.get_next_sibling()
-            if isinstance(child, Gtk.Image):
-                self._update_row.remove(child)
-            child = next_c
+        # Remove previous update status icon
+        if self._update_status_icon is not None:
+            self._update_row.remove(self._update_status_icon)
+            self._update_status_icon = None
 
         if error:
             self._update_row.set_visible(True)
@@ -394,7 +433,6 @@ class SystemsView(Gtk.ScrolledWindow):
             self._update_row.set_subtitle(error)
             icon = Gtk.Image.new_from_icon_name("dialog-error-symbolic")
             icon.add_css_class("error")
-            self._update_row.add_suffix(icon)
         elif update_info:
             self._pending_update = update_info
             self._update_row.set_visible(True)
@@ -406,7 +444,6 @@ class SystemsView(Gtk.ScrolledWindow):
             )
             icon = Gtk.Image.new_from_icon_name("software-update-available-symbolic")
             icon.add_css_class("accent")
-            self._update_row.add_suffix(icon)
         else:
             installed = get_installed_pjeoffice_version() or "?"
             self._update_row.set_visible(True)
@@ -414,7 +451,9 @@ class SystemsView(Gtk.ScrolledWindow):
             self._update_row.set_subtitle(f"Versão instalada: v{installed}")
             icon = Gtk.Image.new_from_icon_name("emblem-ok-symbolic")
             icon.add_css_class("success")
-            self._update_row.add_suffix(icon)
+
+        self._update_status_icon = icon
+        self._update_row.add_suffix(icon)
 
         return False
 

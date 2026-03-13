@@ -120,8 +120,37 @@ Acesso rápido com um clique, organizado por estado e nível:
 - **Detecção de instalação** com exibição da versão instalada
 - **Instalador integrado** — baixa e instala diretamente do site oficial
   (CNJ/TRF3) com progresso visual e log em tempo real
+- **Desinstalador integrado** — remoção completa com confirmação e log
 - **Verificação de atualizações** — manual e automática (a cada 24h)
 - **Acesso rápido** para abrir o PJeOffice Pro
+
+### PJeOffice Pro — Escala HiDPI Automática
+
+> 🆕 **Solução inédita desenvolvida pelo time BigLinux / BigCommunity.**
+> O PJeOffice Pro (Java Swing) exibe janelas minúsculas em monitores de alta
+> resolução — problema que afeta **inclusive o Windows** e que nunca teve
+> correção pública. No GNU/Linux com Wayland, o problema é ainda mais grave, porque
+> a detecção padrão de DPI simplesmente não funciona.
+
+O BigCertificados resolve isso automaticamente no launcher do PJeOffice:
+
+1. **Detecta o DPI real** via `Xft.dpi` do X Resource Database — método que
+   funciona tanto em X11 quanto em Wayland (via XWayland)
+2. **Calcula o fator de escala** (`DPI ÷ 96`) e passa como parâmetro
+   `-Dsun.java2d.uiScale` ao Java
+3. O PJeOffice abre com **tamanho proporcional à resolução do monitor**
+
+| Monitor | Escala GNOME | Xft.dpi | uiScale Java |
+|---------|-------------|---------|-------------|
+| Full HD (1080p) | 1.0x | 96 | 1 |
+| QHD / 2K (1.25x) | 1.25x | 120 | 1.25 |
+| QHD / 2K (1.5x) | 1.5x | 144 | 1.50 |
+| 4K / UHD | 2.0x | 192 | 2 |
+| 5K | 2.5x | 240 | 2.50 |
+
+> **Resultado:** diálogos como "Seleção de certificado" e a interface principal
+> do PJeOffice ficam legíveis e proporcionais em qualquer monitor — da tela
+> Full HD do notebook até um monitor 5K externo. Além disso, as janelas podem ser alteradas de tamanho.
 
 ### Brave — Configuração Automática para PJe Office
 
@@ -270,7 +299,8 @@ big-advogados/
 │
 ├── scripts/                      # Scripts auxiliares
 │   ├── install-pjeoffice-pro.sh  # Instalador PJeOffice Pro
-│   └── pjeoffice-install-helper.sh
+│   ├── pjeoffice-install-helper.sh  # Helper de instalação (pkexec)
+│   └── pjeoffice-uninstall-helper.sh # Helper de desinstalação (pkexec)
 │
 ├── docs/
 │   └── manual-usuario.md         # Manual do usuário

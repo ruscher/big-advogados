@@ -1,4 +1,4 @@
-"""PJeOffice Pro installer dialog — downloads and installs within the GTK4 UI."""
+"""PJeOffice Pro installer and uninstaller dialogs — GTK4 UI."""
 
 from __future__ import annotations
 
@@ -378,4 +378,212 @@ class PJeOfficeInstallerDialog(Adw.Dialog):
         self._install_btn.set_sensitive(True)
         self._install_btn.remove_css_class("suggested-action")
         self._install_btn.add_css_class("destructive-action")
+        return False
+
+
+class PJeOfficeUninstallerDialog(Adw.Dialog):
+    """Dialog that removes PJeOffice Pro with progress logging."""
+
+    def __init__(self, on_removed: Optional[Callable[[], None]] = None) -> None:
+        super().__init__()
+        self.set_title("Remover PJeOffice Pro")
+        self.set_content_width(550)
+        self.set_content_height(400)
+
+        self._on_removed = on_removed
+        self._build_ui()
+
+    def _build_ui(self) -> None:
+        toolbar = Adw.ToolbarView()
+        toolbar.add_top_bar(Adw.HeaderBar())
+
+        main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        main_box.set_margin_top(16)
+        main_box.set_margin_bottom(16)
+        main_box.set_margin_start(16)
+        main_box.set_margin_end(16)
+
+        # Warning icon + title
+        title = Gtk.Label(label="Remover PJeOffice Pro")
+        title.add_css_class("title-3")
+        main_box.append(title)
+
+        info = Gtk.Label(
+            label=(
+                "Esta ação removerá o PJeOffice Pro completamente do sistema.\n"
+                "Você poderá reinstalá-lo a qualquer momento."
+            ),
+        )
+        info.add_css_class("dim-label")
+        info.set_wrap(True)
+        info.set_justify(Gtk.Justification.CENTER)
+        main_box.append(info)
+
+        # Status
+        self._status_label = Gtk.Label(label="Aguardando confirmação")
+        self._status_label.set_halign(Gtk.Align.START)
+        self._status_label.add_css_class("heading")
+        main_box.append(self._status_label)
+
+        # Progress bar
+        self._progress_bar = Gtk.ProgressBar()
+        self._progress_bar.set_show_text(True)
+        self._progress_bar.set_text("")
+        main_box.append(self._progress_bar)
+
+        # Log view
+        log_frame = Gtk.Frame()
+        log_scroll = Gtk.ScrolledWindow()
+        log_scroll.set_vexpand(True)
+        log_scroll.set_min_content_height(150)
+
+        self._log_view = Gtk.TextView()
+        self._log_view.set_editable(False)
+        self._log_view.set_cursor_visible(False)
+        self._log_view.set_monospace(True)
+        self._log_view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        self._log_view.set_top_margin(8)
+        self._log_view.set_bottom_margin(8)
+        self._log_view.set_left_margin(8)
+        self._log_view.set_right_margin(8)
+        self._log_buffer = self._log_view.get_buffer()
+
+        log_scroll.set_child(self._log_view)
+        log_frame.set_child(log_scroll)
+        main_box.append(log_frame)
+
+        # Buttons
+        btn_box = Gtk.Box(spacing=12, homogeneous=True)
+        btn_box.set_halign(Gtk.Align.END)
+        btn_box.set_margin_top(8)
+
+        self._cancel_btn = Gtk.Button(label="Cancelar")
+        self._cancel_btn.connect("clicked", lambda _: self.close())
+        btn_box.append(self._cancel_btn)
+
+        self._remove_btn = Gtk.Button(label="Remover")
+        self._remove_btn.add_css_class("destructive-action")
+        self._remove_btn.connect("clicked", self._on_remove)
+        btn_box.append(self._remove_btn)
+
+        main_box.append(btn_box)
+        toolbar.set_content(main_box)
+        self.set_child(toolbar)
+
+    def _log_append(self, text: str) -> None:
+        GLib.idle_add(self._log_append_ui, text)
+
+    def _log_append_ui(self, text: str) -> bool:
+        end_iter = self._log_buffer.get_end_iter()
+        self._log_buffer.insert(end_iter, text + "\n")
+        mark = self._log_buffer.get_insert()
+        self._log_view.scroll_mark_onscreen(mark)
+        return False
+
+    def _set_status(self, text: str) -> None:
+        GLib.idle_add(self._set_status_ui, text)
+
+    def _set_status_ui(self, text: str) -> bool:
+        self._status_label.set_label(text)
+        return False
+
+    def _set_progress(self, fraction: float, text: str) -> None:
+        GLib.idle_add(self._set_progress_ui, fraction, text)
+
+    def _set_progress_ui(self, fraction: float, text: str) -> bool:
+        self._progress_bar.set_fraction(fraction)
+        self._progress_bar.set_text(text)
+        return False
+
+    def _on_remove(self, _btn: Gtk.Button) -> None:
+        self._remove_btn.set_sensitive(False)
+        self._remove_btn.set_label("Removendo...")
+        self._cancel_btn.set_sensitive(False)
+        threading.Thread(target=self._remove_thread, daemon=True).start()
+
+    def _remove_thread(self) -> None:
+        """Run the uninstall helper script via pkexec."""
+        try:
+            self._set_status("Removendo PJeOffice Pro...")
+            self._set_progress(0.1, "Preparando...")
+
+            helper_script = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                "scripts", "pjeoffice-uninstall-helper.sh",
+            )
+
+            # Fallback: check installed location
+            if not os.path.isfile(helper_script):
+                helper_script = "/usr/lib/big-certificados/scripts/pjeoffice-uninstall-helper.sh"
+
+            if not os.path.isfile(helper_script):
+                self._log_append("ERRO: Script de remoção não encontrado.")
+                self._set_status("Falha — Script não encontrado")
+                GLib.idle_add(self._on_remove_failed)
+                return
+
+            self._log_append("Executando remoção com privilégios elevados (pkexec)...")
+            self._log_append("Uma janela de autenticação será exibida.")
+            self._log_append("")
+            self._set_progress(0.3, "Autenticando...")
+
+            result = subprocess.run(
+                ["pkexec", "bash", helper_script],
+                capture_output=True, text=True, timeout=60,
+            )
+
+            # Parse and display output
+            for line in result.stdout.splitlines():
+                if line.startswith("LOG: "):
+                    self._log_append(f"  {line[5:]}")
+                elif line.startswith("OK: "):
+                    self._log_append(f"  ✓ {line[4:]}")
+                else:
+                    self._log_append(f"  {line}")
+
+            if result.stderr:
+                for line in result.stderr.splitlines():
+                    self._log_append(f"  [stderr] {line}")
+
+            if result.returncode != 0:
+                self._log_append("")
+                self._log_append(f"ERRO: pkexec retornou código {result.returncode}")
+                if result.returncode == 126:
+                    self._log_append("(Autenticação cancelada pelo usuário)")
+                self._set_status("Remoção cancelada ou falhou")
+                GLib.idle_add(self._on_remove_failed)
+                return
+
+            # Success
+            self._set_progress(1.0, "100% — Concluído!")
+            self._set_status("Remoção concluída!")
+            self._log_append("")
+            self._log_append("═══════════════════════════════════════════")
+            self._log_append("  PJeOffice Pro removido com sucesso!")
+            self._log_append("═══════════════════════════════════════════")
+            GLib.idle_add(self._on_remove_success)
+
+        except subprocess.TimeoutExpired:
+            self._log_append("ERRO: Operação expirou (timeout)")
+            self._set_status("Falha — Timeout")
+            GLib.idle_add(self._on_remove_failed)
+        except Exception as exc:
+            self._log_append(f"ERRO: {exc}")
+            self._set_status("Falha na remoção")
+            GLib.idle_add(self._on_remove_failed)
+
+    def _on_remove_success(self) -> bool:
+        self._remove_btn.set_label("Removido ✓")
+        self._remove_btn.add_css_class("success")
+        self._remove_btn.remove_css_class("destructive-action")
+        self._cancel_btn.set_label("Fechar")
+        self._cancel_btn.set_sensitive(True)
+        if self._on_removed:
+            self._on_removed()
+        return False
+
+    def _on_remove_failed(self) -> bool:
+        self._remove_btn.set_label("Tentar Novamente")
+        self._remove_btn.set_sensitive(True)
+        self._cancel_btn.set_sensitive(True)
         return False
