@@ -149,11 +149,12 @@ def _extract_icp_brasil_fields(cert: x509.Certificate, info: CertificateInfo) ->
                 continue
 
             if oid == OID_CPF:
-                # Format: date(8) + CPF(11) + ...
-                cpf_match = re.search(r"\d{11}", decoded)
-                if cpf_match:
-                    cpf = cpf_match.group()
-                    info.cpf = f"{cpf[:3]}.{cpf[3:6]}.{cpf[6:9]}-{cpf[9:]}"
+                # ICP-Brasil format: date(8) + CPF(11) + NIS(11) + RG(15) + ...
+                # Extract CPF from fixed position 8:19
+                if len(decoded) >= 19:
+                    cpf = decoded[8:19]
+                    if cpf.isdigit() and len(cpf) == 11:
+                        info.cpf = f"{cpf[:3]}.{cpf[3:6]}.{cpf[6:9]}-{cpf[9:]}"
 
             elif oid == OID_CNPJ:
                 cnpj_match = re.search(r"\d{14}", decoded)

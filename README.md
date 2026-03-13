@@ -335,6 +335,25 @@ sudo usermod -aG plugdev $USER
 
 Faça logout e login para aplicar.
 
+## Desinstalação
+
+Para remover o BigCertificados do sistema:
+
+```bash
+# Remover o pacote
+sudo pacman -Rns big-certificados
+
+# (Opcional) Remover os dados e configurações do usuário
+rm -rf ~/.config/bigcertificados
+rm -rf ~/.local/share/bigcertificados
+rm -rf ~/.cache/bigcertificados
+```
+
+> **Nota:** O comando `pacman -Rns` remove o pacote e suas dependências órfãs.
+> Os dados do usuário (configurações e certificados armazenados) **não** são
+> removidos automaticamente — execute os comandos opcionais acima se desejar
+> uma remoção completa.
+
 ## Configuração
 
 BigCertificados armazena seus dados seguindo a especificação XDG Base Directory:
