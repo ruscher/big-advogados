@@ -72,12 +72,66 @@ mv "${TMP_DIR}/pjeoffice-pro" "${INSTALL_DIR}"
 # Create launch script
 cat > "${INSTALL_DIR}/pjeoffice-pro.sh" << 'LAUNCHER'
 #!/bin/bash
+# Auto-detect active XWayland for Java Swing (Wayland sessions)
+XWAYLAND_CMD=$(pgrep -a Xwayland 2>/dev/null | grep -v defunct | head -1)
+if [[ -n "${XWAYLAND_CMD}" ]]; then
+    NEW_DISPLAY=$(echo "${XWAYLAND_CMD}" | grep -oP ':\d+' | head -1)
+    NEW_AUTH=$(echo "${XWAYLAND_CMD}" | grep -oP '(?<=-auth )\S+')
+    [[ -n "${NEW_DISPLAY}" ]] && export DISPLAY="${NEW_DISPLAY}"
+    [[ -n "${NEW_AUTH}" ]] && export XAUTHORITY="${NEW_AUTH}"
+fi
+
 # Auto-detect HiDPI scale factor for Java Swing
-# Uses Xft.dpi from X resources (works on both X11 and Wayland/XWayland)
+# Method 1: Xft.dpi from X resources
+# Method 2: GNOME Mutter DisplayConfig via DBus
+# Method 3: Physical DPI from EDID (kernel DRM)
+# Compensates for xwayland-native-scaling when active
 UI_SCALE="1"
+MUTTER_SCALE=""
+
 DPI=$(xrdb -query 2>/dev/null | awk '/Xft\.dpi:/{print $2}')
 if [[ -n "${DPI}" ]] && [[ "${DPI}" -gt 96 ]]; then
     UI_SCALE=$(awk "BEGIN{s=${DPI}/96; if(s==int(s)) printf \"%d\",s; else printf \"%.2f\",s}")
+else
+    # Fallback 1: GNOME Mutter logical monitor scale
+    MUTTER=$(gdbus call --session \
+        --dest org.gnome.Mutter.DisplayConfig \
+        --object-path /org/gnome/Mutter/DisplayConfig \
+        --method org.gnome.Mutter.DisplayConfig.GetCurrentState 2>/dev/null)
+    if [[ -n "${MUTTER}" ]]; then
+        MUTTER_SCALE=$(echo "${MUTTER##*], [(}" | grep -oP '\d+\.\d+' | \
+            awk '$1>1.0 && $1<5.0' | sort -rn | head -1)
+        [[ -n "${MUTTER_SCALE}" ]] && UI_SCALE="${MUTTER_SCALE}"
+    fi
+
+    # Fallback 2: physical DPI from EDID via kernel DRM
+    MAX_EDID_DPI=0
+    for edid in /sys/class/drm/card*-*/edid; do
+        [[ "$(cat "$(dirname "$edid")/status" 2>/dev/null)" != "connected" ]] && continue
+        w_cm=$(dd if="$edid" bs=1 skip=21 count=1 2>/dev/null | od -An -tu1 | tr -d ' ')
+        [[ -z "${w_cm}" || "${w_cm}" -eq 0 ]] && continue
+        native=$(head -1 "$(dirname "$edid")/modes" 2>/dev/null)
+        w_px=${native%%x*}
+        [[ -z "${w_px}" || "${w_px}" -eq 0 ]] && continue
+        edpi=$(awk "BEGIN{printf \"%d\", ${w_px} / (${w_cm} / 2.54)}")
+        [[ "${edpi}" -gt "${MAX_EDID_DPI}" ]] && MAX_EDID_DPI="${edpi}"
+    done
+    if [[ "${MAX_EDID_DPI}" -gt 120 ]]; then
+        EDID_SCALE=$(awk "BEGIN{s=${MAX_EDID_DPI}/96; if(s==int(s)) printf \"%d\",s; else printf \"%.2f\",s}")
+        if awk "BEGIN{exit(${EDID_SCALE} > ${UI_SCALE} ? 0 : 1)}"; then
+            UI_SCALE="${EDID_SCALE}"
+        fi
+    fi
+
+    # Compensate for xwayland-native-scaling: XWayland renders at native
+    # resolution, so Java uiScale must account for the Mutter fractional scale
+    if [[ -n "${MUTTER_SCALE}" ]]; then
+        IS_FRAC=$(awk "BEGIN{print (${MUTTER_SCALE} != int(${MUTTER_SCALE})) ? 1 : 0}")
+        HAS_NATIVE=$(gsettings get org.gnome.mutter experimental-features 2>/dev/null | grep -c 'xwayland-native-scaling' || true)
+        if [[ "${IS_FRAC}" -eq 1 ]] && [[ "${HAS_NATIVE}" -gt 0 ]]; then
+            UI_SCALE=$(awk "BEGIN{s=${UI_SCALE}*${MUTTER_SCALE}; s=int(s*2)/2.0; if(s==int(s)) printf \"%d\",s; else printf \"%.1f\",s}")
+        fi
+    fi
 fi
 
 exec /usr/lib/jvm/java-11-openjdk/bin/java \
